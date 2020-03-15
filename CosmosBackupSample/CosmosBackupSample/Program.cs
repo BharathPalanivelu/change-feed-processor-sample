@@ -12,21 +12,25 @@ namespace CosmosBackupSample
     class Program
     {
         private static CosmosClient _cosmosClient;
-        private static IConfiguration _configuration;
 
-        static async void Main(string[] args)
+        private static Database _productDatabase;
+        private static Container _productContainer;
+        private static Container _productLeaseContainer;
+        private static Container _productBackUpContainer;
+
+        static async Task Main(string[] args)
         {
             Console.WriteLine("Starting Change Feed Sample");
 
-            var builder = new ConfigurationBuilder()
-                .SetBasePath(Directory.GetCurrentDirectory())
-                .AddJsonFile("appsettings.json", optional: true, reloadOnChange: true);
-
-            IConfigurationRoot configuration = builder.Build();
+            _cosmosClient = new CosmosClient("");
+            _productDatabase = _cosmosClient.GetDatabase("Products");
+            _productContainer = _productDatabase.GetContainer("Product");
+            _productLeaseContainer = _productDatabase.GetContainer("lease");
+            _productBackUpContainer = _productDatabase.GetContainer("ProductBackup");
 
             try
             {
-                await StartChangeFeedProcessorAsync(_cosmosClient, _configuration);
+                await StartChangeFeedProcessorAsync(_cosmosClient);
             }
             catch (Exception ex)
             {
@@ -38,16 +42,10 @@ namespace CosmosBackupSample
         }
 
         private static async Task<ChangeFeedProcessor> StartChangeFeedProcessorAsync(
-            CosmosClient cosmosClient,
-            IConfiguration configuration)
+            CosmosClient cosmosClient)
         {
-            string databaseName = configuration["DatabaseName"];
-            string sourceContainer = configuration["SourceContainerName"];
-            string leaseContainerName = configuration["LeaseContainerName"];
-            string backupContainerName = configuration["BackupContainerName"];
-
-            Container leaseContainer = cosmosClient.GetContainer(databaseName, leaseContainerName);
-            ChangeFeedProcessor changeFeedProcessor = cosmosClient.GetContainer(databaseName, sourceContainer)
+            Container leaseContainer = cosmosClient.GetContainer(_productDatabase.Id, _productLeaseContainer.Id);
+            ChangeFeedProcessor changeFeedProcessor = cosmosClient.GetContainer(_productDatabase.Id, _productContainer.Id)
                 .GetChangeFeedProcessorBuilder<Product>("cosmosBackupSample", HandleChangesAsync)
                 .WithInstanceName("consoleHost")
                 .WithLeaseContainer(leaseContainer)
@@ -59,14 +57,19 @@ namespace CosmosBackupSample
             return changeFeedProcessor;
         }
 
-        private static async Task HandleChangesAsync(IReadOnlyCollection<Product> changes, CancellationToken cancellationToken)
+        private static async Task HandleChangesAsync(
+            IReadOnlyCollection<Product> changes,
+            CancellationToken cancellationToken)
         {
             Console.WriteLine("Backing up Product items");
 
             foreach (Product product in changes)
             {
-                // TODO: Add product to backup container.
-                await _cosmosClient.GetContainer("", "").CreateItemAsync(product);
+                await _productBackUpContainer.CreateItemAsync(
+                    product,
+                    partitionKey: new PartitionKey(product.ProductCategory));
+                Console.WriteLine($"Product added to backup container");
+                await Task.Delay(10);
             }
 
             Console.WriteLine("Finished handling changes");
